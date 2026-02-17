@@ -111,7 +111,7 @@ TASK_LIST_TEXT = (
 NO_TASKS_TEXT = (
     "📂 **Forwarding Tasks**\n\n"
     "No tasks found.\n"
-    "Use /add\\_task to create one."
+    "Use /add_task to create one."
 )
 
 
