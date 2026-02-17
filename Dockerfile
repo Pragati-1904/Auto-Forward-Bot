@@ -1,8 +1,10 @@
-FROM python:3.10.4-slim-buster
-RUN mkdir /app && chmod 777 /app
+FROM python:3.10-slim
+
 WORKDIR /app
-ENV DEBIAN_FRONTEND=noninteractive
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
 COPY . .
-RUN apt -qq update && apt upgrade -y
-RUN pip3 install --no-cache-dir --upgrade -r requirements.txt
-CMD [ "python3","-m" ,"bot" ]
+
+CMD ["python3", "-m", "bot"]
