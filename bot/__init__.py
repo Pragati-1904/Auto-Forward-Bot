@@ -1,34 +1,34 @@
+import asyncio
+import logging
+
+from redis.asyncio import Redis
 from telethon import TelegramClient
-from aioredis import Redis
-from logging import INFO, basicConfig, getLogger
+
 from .config import Var
 
-basicConfig(
+logging.basicConfig(
     format="%(asctime)s || %(name)s [%(levelname)s] : %(message)s",
-    level=INFO,
+    level=logging.INFO,
     datefmt="%m/%d/%Y, %H:%M:%S",
 )
-LOGS = getLogger(__name__)
-TelethonLogger = getLogger("Telethon")
-TelethonLogger.setLevel(INFO)
+LOGS = logging.getLogger(__name__)
+logging.getLogger("Telethon").setLevel(logging.INFO)
+
+# Create a shared event loop for Telethon compatibility
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
 
 try:
-    LOGS.info("Trying Connect With Telegram")
-    bot = TelegramClient(None, Var.API_ID, Var.API_HASH)
-    LOGS.info("Successfully Connected with Telegram")
+    LOGS.info("Connecting to Telegram...")
+    bot = TelegramClient(None, Var.API_ID, Var.API_HASH, loop=loop)
+    LOGS.info("Successfully connected to Telegram.")
 except Exception as e:
-    LOGS.critical(str(e))
-    exit()
+    LOGS.critical("Failed to create Telegram client: %s", e)
+    exit(1)
 
 try:
-    dB = Redis(
-        username=Var.REDISUSER,
-        host=Var.REDISHOST,
-        port=Var.REDISPORT,
-        password=Var.REDISPASSWORD,
-        decode_responses=True,
-    )
-    CACHE = {}
-except Exception as es:
-    LOGS.critical(str(es))
-    exit()
+    db = Redis.from_url(Var.REDIS_URL, decode_responses=True)
+    CACHE: dict[str, dict] = {}
+except Exception as e:
+    LOGS.critical("Failed to connect to Redis: %s", e)
+    exit(1)

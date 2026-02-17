@@ -1,3 +1,6 @@
-from telethon import events, Button
-from bot import *
-import asyncio, os, sys, re
+import asyncio
+import re
+
+from telethon import Button, events
+
+from bot import CACHE, LOGS, Var, bot, db

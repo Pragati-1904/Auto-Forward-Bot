@@ -1,11 +1,34 @@
-from bot import dB, CACHE
+import json
+from typing import Any
+
+from bot import CACHE, LOGS, db
 
 
-async def get_work(work: str):
-    return CACHE.get(work) or {}
+async def get_work(work_name: str) -> dict:
+    """Get a task by name from the local cache."""
+    return CACHE.get(work_name) or {}
 
 
-async def setup_work(work_name: str, source: list, target: list):
+async def is_work_present(work_name: str) -> bool:
+    """Check if a task name already exists."""
+    return bool(CACHE.get(work_name))
+
+
+async def get_all_work_names() -> list[str]:
+    """Return all task names."""
+    return list(CACHE.keys())
+
+
+async def get_tasks_for_source(source_id: int) -> list[dict]:
+    """Return all tasks that have the given source_id in their source list."""
+    return [
+        task for task in CACHE.values()
+        if source_id in (task.get("source") or [])
+    ]
+
+
+async def setup_work(work_name: str, source: list[int], target: list[int]) -> None:
+    """Create a new forwarding task with default settings."""
     data = {
         "work_name": work_name,
         "source": source,
@@ -16,48 +39,42 @@ async def setup_work(work_name: str, source: list, target: list):
         "crossids": {},
         "has_to_edit": False,
         "has_to_blacklist": False,
-        "has_to_forward": True
+        "has_to_forward": True,
     }
-    CACHE.update({work_name: data})
-    return await dB.set(work_name, str(data))
+    CACHE[work_name] = data
+    await _persist(work_name, data)
 
 
-async def get_target_chat_with_data(id: int):
-    dst = []
-    for work in CACHE.keys():
-        if id in (CACHE[work].get("source") or []):
-            dst.append(CACHE[work])
-    return dst
-
-async def edit_work(work_name: str, *args, **kwargs):
-    raw_data = await get_work(work_name)
-    if not raw_data:
+async def edit_work(work_name: str, **kwargs: Any) -> bool:
+    """Update specific fields of an existing task."""
+    task_data = await get_work(work_name)
+    if not task_data:
         return False
-    for key in kwargs.keys():
-        raw_data[key] = kwargs[key]
-    CACHE.update({work_name: raw_data})
-    return await dB.set(work_name, str(raw_data))
-
-async def delete_work(work_name: str):
-    if work_name in CACHE:
-        CACHE.pop(work_name)
-    return await dB.delete(work_name)
+    task_data.update(kwargs)
+    CACHE[work_name] = task_data
+    await _persist(work_name, task_data)
+    return True
 
 
-async def is_work_present(work_name: str):
-    data = await get_work(work_name)
+async def delete_work(work_name: str) -> None:
+    """Delete a task from both cache and Redis."""
+    CACHE.pop(work_name, None)
+    await db.delete(work_name)
+
+
+async def rename_work(old_name: str, new_name: str) -> None:
+    """Rename a task, updating both cache and Redis."""
+    data = CACHE.pop(old_name, None)
     if data:
-        return True
-    return False
+        data["work_name"] = new_name
+        CACHE[new_name] = data
+    await db.rename(old_name, new_name)
+    await _persist(new_name, CACHE.get(new_name, {}))
 
 
-async def get_name_of_all_work():
-    return CACHE.keys()
-
-
-async def rename_work(work_name: str, new_work_name: str):
-    if work_name in CACHE:
-        data = CACHE.get(work_name)
-        CACHE.pop(work_name)
-        CACHE.update({new_work_name: data})
-    return await dB.rename(work_name, new_work_name)
+async def _persist(work_name: str, data: dict) -> None:
+    """Persist task data to Redis as JSON."""
+    try:
+        await db.set(work_name, json.dumps(data))
+    except Exception as e:
+        LOGS.error("Failed to persist task '%s' to Redis: %s", work_name, e)
