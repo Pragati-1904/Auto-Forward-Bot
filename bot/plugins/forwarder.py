@@ -1,4 +1,4 @@
-from . import LOGS, asyncio, bot, events
+from . import CACHE, LOGS, asyncio, bot, events
 from .database.addwork_db import edit_work, get_tasks_for_source
 from telethon.utils import get_peer_id
 
@@ -27,7 +27,7 @@ async def _forward_message(e, task: dict) -> None:
             else:
                 msg = await e.client.send_message(chat, e.message)
                 # Track cross-chat message IDs for edit forwarding
-                cross_ids.setdefault(e.chat_id, {}).setdefault(e.id, {})[chat] = msg.id
+                cross_ids.setdefault(str(e.chat_id), {}).setdefault(str(e.id), {})[str(chat)] = msg.id
                 await edit_work(task["work_name"], crossids=cross_ids)
         except Exception as exc:
             LOGS.warning("Failed to forward message to %s: %s", chat, exc)
@@ -80,3 +80,42 @@ async def handle_message_edit(e):
     for task in tasks:
         if task.get("has_to_edit"):
             asyncio.ensure_future(_forward_edit(e, task))
+
+
+async def _delete_forwarded(chat_id: int, deleted_ids: list[int], task: dict) -> None:
+    """Delete forwarded messages in target channels when source messages are deleted."""
+    cross_ids = task["crossids"]
+    chat_id_key = str(chat_id)
+
+    chat_map = cross_ids.get(chat_id_key, {})
+    if not chat_map:
+        return
+
+    for msg_id in deleted_ids:
+        msg_id_key = str(msg_id)
+        mapped = chat_map.get(msg_id_key)
+        if not mapped:
+            continue
+
+        for chat_str, target_msg_id in mapped.items():
+            try:
+                await bot.delete_messages(int(chat_str), int(target_msg_id))
+            except Exception as exc:
+                LOGS.warning("Failed to delete message in chat %s: %s", chat_str, exc)
+
+        # Clean up the mapping
+        chat_map.pop(msg_id_key, None)
+
+    cross_ids[chat_id_key] = chat_map
+    await edit_work(task["work_name"], crossids=cross_ids)
+
+
+@bot.on(events.MessageDeleted())
+async def handle_message_delete(e):
+    chat_id = e.chat_id
+    if not chat_id:
+        return
+    tasks = await get_tasks_for_source(chat_id)
+    for task in tasks:
+        if task.get("has_to_forward"):
+            asyncio.ensure_future(_delete_forwarded(chat_id, e.deleted_ids, task))
