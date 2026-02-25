@@ -7,3 +7,4 @@ class Var:
     BOT_TOKEN: str = config("BOT_TOKEN")
     REDIS_URL: str = config("REDIS_URL")
     ADMINS: list[int] = [int(i) for i in config("ADMINS").split()]
+    SESSION_STRING: str | None = config("SESSION_STRING", default=None)

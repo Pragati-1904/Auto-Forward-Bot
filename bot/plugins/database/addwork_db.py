@@ -1,7 +1,7 @@
 import json
 from typing import Any
 
-from bot import CACHE, LOGS, db
+from bot import CACHE, FORWARD_MODE_KEY, LOGS, db
 
 
 async def get_work(work_name: str) -> dict:
@@ -15,8 +15,8 @@ async def is_work_present(work_name: str) -> bool:
 
 
 async def get_all_work_names() -> list[str]:
-    """Return all task names."""
-    return list(CACHE.keys())
+    """Return all task names (excluding system keys)."""
+    return [k for k in CACHE.keys() if k != FORWARD_MODE_KEY]
 
 
 async def get_tasks_for_source(source_id: int) -> list[dict]:
