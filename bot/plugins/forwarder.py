@@ -16,7 +16,7 @@ def _should_process(e) -> bool:
     if not userbot:
         return True
     mode = CACHE.get(FORWARD_MODE_KEY, "bot")
-    is_bot_event = (e.client == bot)
+    is_bot_event = (e.client is bot)
     if mode == "bot" and not is_bot_event:
         return False
     if mode == "userbot" and is_bot_event:
@@ -119,37 +119,65 @@ async def _delete_forwarded(chat_id: int, deleted_ids: list[int], task: dict) ->
 # ──────────────────────────────────────────────
 
 async def _on_new_message(e):
-    if not _should_process(e):
+    client_name = "bot" if e.client is bot else "userbot"
+    LOGS.info("[FWD] Handler hit | client=%s | out=%s | chat=%s",
+             client_name, getattr(e, "out", "N/A"), getattr(e, "chat_id", "N/A"))
+    if getattr(e, "out", False):
+        LOGS.info("[FWD] Skipped: outgoing")
         return
-    ch = await e.get_chat()
-    chat_id = get_peer_id(ch)
-    tasks = await get_tasks_for_source(chat_id)
-    for task in tasks:
-        if task.get("has_to_forward"):
-            asyncio.ensure_future(_forward_message(e, task))
+    if not _should_process(e):
+        LOGS.info("[FWD] Skipped: wrong client for mode=%s", CACHE.get(FORWARD_MODE_KEY, "bot"))
+        return
+    try:
+        ch = await e.get_chat()
+        if not ch:
+            return
+        chat_id = get_peer_id(ch)
+        LOGS.info("[FWD] Resolved chat_id=%s", chat_id)
+        tasks = await get_tasks_for_source(chat_id)
+        if not tasks:
+            LOGS.info("[FWD] No tasks matched for chat_id=%s", chat_id)
+            return
+        LOGS.info("[FWD] Matched %d task(s) for chat_id=%s", len(tasks), chat_id)
+        for task in tasks:
+            if task.get("has_to_forward"):
+                LOGS.info("[FWD] Forwarding to targets: %s", task.get("target"))
+                asyncio.ensure_future(_forward_message(e, task))
+    except Exception as exc:
+        LOGS.warning("Error in new message handler: %s", exc)
 
 
 async def _on_message_edit(e):
+    if getattr(e, "out", False):
+        return
     if not _should_process(e):
         return
-    ch = await e.get_chat()
-    chat_id = get_peer_id(ch)
-    tasks = await get_tasks_for_source(chat_id)
-    for task in tasks:
-        if task.get("has_to_edit"):
-            asyncio.ensure_future(_forward_edit(e, task))
+    try:
+        ch = await e.get_chat()
+        if not ch:
+            return
+        chat_id = get_peer_id(ch)
+        tasks = await get_tasks_for_source(chat_id)
+        for task in tasks:
+            if task.get("has_to_edit"):
+                asyncio.ensure_future(_forward_edit(e, task))
+    except Exception as exc:
+        LOGS.warning("Error in message edit handler: %s", exc)
 
 
 async def _on_message_delete(e):
     if not _should_process(e):
         return
-    chat_id = e.chat_id
-    if not chat_id:
-        return
-    tasks = await get_tasks_for_source(chat_id)
-    for task in tasks:
-        if task.get("has_to_forward"):
-            asyncio.ensure_future(_delete_forwarded(chat_id, e.deleted_ids, task))
+    try:
+        chat_id = e.chat_id
+        if not chat_id:
+            return
+        tasks = await get_tasks_for_source(chat_id)
+        for task in tasks:
+            if task.get("has_to_forward"):
+                asyncio.ensure_future(_delete_forwarded(chat_id, e.deleted_ids, task))
+    except Exception as exc:
+        LOGS.warning("Error in message delete handler: %s", exc)
 
 
 # ──────────────────────────────────────────────
@@ -176,11 +204,11 @@ async def handle_message_delete_bot(e):
 # ──────────────────────────────────────────────
 
 if userbot:
-    @userbot.on(events.NewMessage(incoming=True))
+    @userbot.on(events.NewMessage())
     async def handle_new_message_userbot(e):
         await _on_new_message(e)
 
-    @userbot.on(events.MessageEdited(incoming=True))
+    @userbot.on(events.MessageEdited())
     async def handle_message_edit_userbot(e):
         await _on_message_edit(e)
 

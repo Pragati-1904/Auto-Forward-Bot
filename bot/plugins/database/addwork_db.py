@@ -23,7 +23,7 @@ async def get_tasks_for_source(source_id: int) -> list[dict]:
     """Return all tasks that have the given source_id in their source list."""
     return [
         task for task in CACHE.values()
-        if source_id in (task.get("source") or [])
+        if isinstance(task, dict) and source_id in (task.get("source") or [])
     ]
 
 

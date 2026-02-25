@@ -1,4 +1,5 @@
 from . import LOGS, Button, Var, bot, events, re
+from .add_work import validate_channels
 from .database.addwork_db import (
     delete_work,
     edit_work,
@@ -248,8 +249,8 @@ async def handle_edit_source(e):
             await conv.send_message(
                 "📥 **Edit Source Channels**\n\n"
                 f"Current sources:\n{current}\n\n"
-                "Send the new source channel ID(s).\n"
-                "Separate multiple IDs with a space.\n\n"
+                "Send channel ID(s) or invite link(s).\n"
+                "One entry per line.\n\n"
                 "Send /cancel to go back."
             )
 
@@ -259,34 +260,17 @@ async def handle_edit_source(e):
                 if text.startswith("/cancel"):
                     return await _conv_send_task_detail(conv, task_name)
 
-                try:
-                    source_chats = [int(i) for i in text.split()]
-                except ValueError:
+                tokens = [t.strip() for t in text.splitlines() if t.strip()]
+                if not tokens:
                     await conv.send_message(
                         "⚠️ **Invalid Input**\n\n"
-                        "Please send valid numeric channel IDs.\n"
+                        "Please send channel IDs or invite links.\n"
                         "Try again:"
                     )
                     continue
 
-                failed = []
-                for cid in source_chats:
-                    try:
-                        await bot.get_entity(cid)
-                    except Exception:
-                        failed.append(cid)
-
-                if failed:
-                    failed_list = "\n".join(f"  • {cid}" for cid in failed)
-                    await conv.send_message(
-                        "⚠️ **Invalid Channel**\n\n"
-                        f"Could not access:\n{failed_list}\n\n"
-                        "Ensure:\n"
-                        "  • The ID is correct\n"
-                        "  • The bot is an admin\n"
-                        "  • The channel exists\n\n"
-                        "Try again:"
-                    )
+                source_chats = await validate_channels(conv, tokens)
+                if source_chats is None:
                     continue
 
                 await edit_work(work_name=task_name, source=source_chats)
@@ -314,8 +298,8 @@ async def handle_edit_target(e):
             await conv.send_message(
                 "📤 **Edit Target Channels**\n\n"
                 f"Current targets:\n{current}\n\n"
-                "Send the new destination channel ID(s).\n"
-                "Separate multiple IDs with a space.\n\n"
+                "Send channel ID(s) or invite link(s).\n"
+                "One entry per line.\n\n"
                 "Send /cancel to go back."
             )
 
@@ -325,34 +309,17 @@ async def handle_edit_target(e):
                 if text.startswith("/cancel"):
                     return await _conv_send_task_detail(conv, task_name)
 
-                try:
-                    target_chats = [int(i) for i in text.split()]
-                except ValueError:
+                tokens = [t.strip() for t in text.splitlines() if t.strip()]
+                if not tokens:
                     await conv.send_message(
                         "⚠️ **Invalid Input**\n\n"
-                        "Please send valid numeric channel IDs.\n"
+                        "Please send channel IDs or invite links.\n"
                         "Try again:"
                     )
                     continue
 
-                failed = []
-                for cid in target_chats:
-                    try:
-                        await bot.get_entity(cid)
-                    except Exception:
-                        failed.append(cid)
-
-                if failed:
-                    failed_list = "\n".join(f"  • {cid}" for cid in failed)
-                    await conv.send_message(
-                        "⚠️ **Invalid Channel**\n\n"
-                        f"Could not access:\n{failed_list}\n\n"
-                        "Ensure:\n"
-                        "  • The ID is correct\n"
-                        "  • The bot is an admin\n"
-                        "  • The channel exists\n\n"
-                        "Try again:"
-                    )
+                target_chats = await validate_channels(conv, tokens)
+                if target_chats is None:
                     continue
 
                 await edit_work(work_name=task_name, target=target_chats)
