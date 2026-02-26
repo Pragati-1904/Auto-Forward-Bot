@@ -4,7 +4,7 @@ from importlib import import_module
 from traceback import format_exc
 
 import bot as _bot_pkg
-from . import CACHE, FORWARD_MODE_KEY, LOGS, Var, bot, db, loop, userbot
+from . import CACHE, FORWARD_MODE_KEY, LOGS, SOURCE_INDEX, Var, bot, db, loop, userbot
 from redis.asyncio import Redis
 
 
@@ -17,7 +17,11 @@ async def sync_redis_to_cache(redis_db: Redis, cache: dict) -> None:
                 continue
             raw = await redis_db.get(key)
             if raw:
-                cache[key] = json.loads(raw)
+                task_data = json.loads(raw)
+                cache[key] = task_data
+                # Build SOURCE_INDEX for O(1) lookups
+                for src in task_data.get("source") or []:
+                    SOURCE_INDEX.setdefault(src, set()).add(key)
     except Exception as e:
         LOGS.exception("Failed to sync Redis to local cache: %s", e)
 

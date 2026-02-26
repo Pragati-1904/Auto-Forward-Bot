@@ -50,6 +50,7 @@ else:
 try:
     db = Redis.from_url(Var.REDIS_URL, decode_responses=True)
     CACHE: dict[str, dict] = {}
+    SOURCE_INDEX: dict[int, set[str]] = {}
 except Exception as e:
     LOGS.critical("Failed to connect to Redis: %s", e)
     exit(1)

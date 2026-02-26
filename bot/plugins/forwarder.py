@@ -1,6 +1,10 @@
+import time
+
 from . import CACHE, FORWARD_MODE_KEY, LOGS, asyncio, bot, events, userbot
 from .database.addwork_db import edit_work, get_tasks_for_source
-from telethon.utils import get_peer_id
+
+# Crossids entries older than this (seconds) are pruned
+_CROSSIDS_TTL = 2 * 24 * 3600  # 2 days
 
 
 def _get_active_client():
@@ -24,6 +28,16 @@ def _should_process(e) -> bool:
     return True
 
 
+async def _send_to_target(client, chat, e, show_header: bool):
+    """Send a single message to one target chat. Returns (chat, msg_id) or None."""
+    if show_header:
+        await e.message.forward_to(chat)
+        return None
+    else:
+        msg = await client.send_message(chat, e.message)
+        return (chat, msg.id)
+
+
 async def _forward_message(e, task: dict) -> None:
     """Forward a new message to all target channels for a given task."""
     if task.get("delay"):
@@ -36,25 +50,31 @@ async def _forward_message(e, task: dict) -> None:
     show_header = task.get("show_forward_header", False)
     use_blacklist = task.get("has_to_blacklist", False)
 
-    for chat in target_chats:
-        try:
-            if use_blacklist and blacklist_words:
-                message_text = (e.message.message or "").lower()
-                if any(word in message_text for word in blacklist_words):
-                    continue
+    # Blacklist check — done once, skip entire message if matched
+    if use_blacklist and blacklist_words:
+        message_text = (e.message.message or "").lower()
+        if any(word in message_text for word in blacklist_words):
+            return
 
-            if show_header:
-                msg = await client.get_messages(e.chat_id, ids=e.id)
-                if msg:
-                    await msg.forward_to(chat)
-                else:
-                    await e.message.forward_to(chat)
-            else:
-                msg = await client.send_message(chat, e.message)
-                cross_ids.setdefault(str(e.chat_id), {}).setdefault(str(e.id), {})[str(chat)] = msg.id
-                await edit_work(task["work_name"], crossids=cross_ids)
-        except Exception as exc:
-            LOGS.warning("Failed to forward message to %s: %s", chat, exc)
+    # Fire off all targets in parallel
+    coros = [_send_to_target(client, chat, e, show_header) for chat in target_chats]
+    results = await asyncio.gather(*coros, return_exceptions=True)
+
+    # Collect crossids from successful sends (non-header mode only)
+    ts = int(time.time())
+    needs_persist = False
+    for result in results:
+        if isinstance(result, Exception):
+            LOGS.warning("Failed to forward message: %s", result)
+        elif result is not None:
+            chat, msg_id = result
+            entry = cross_ids.setdefault(str(e.chat_id), {}).setdefault(str(e.id), {})
+            entry[str(chat)] = {"id": msg_id, "ts": ts}
+            needs_persist = True
+
+    # Single Redis write after all targets
+    if needs_persist:
+        await edit_work(task["work_name"], crossids=cross_ids)
 
 
 async def _forward_edit(e, task: dict) -> None:
@@ -71,13 +91,15 @@ async def _forward_edit(e, task: dict) -> None:
     if not mapped:
         return
 
-    for chat_str, target_msg_id in mapped.items():
-        try:
-            if use_blacklist and blacklist_words:
-                message_text = (e.message.message or "").lower()
-                if any(word in message_text for word in blacklist_words):
-                    continue
+    if use_blacklist and blacklist_words:
+        message_text = (e.message.message or "").lower()
+        if any(word in message_text for word in blacklist_words):
+            return
 
+    for chat_str, value in mapped.items():
+        try:
+            # Backward compat: value can be int (old format) or dict (new format)
+            target_msg_id = value["id"] if isinstance(value, dict) else value
             chat = int(chat_str)
             msg = await client.get_messages(chat, ids=int(target_msg_id))
             if msg:
@@ -102,8 +124,9 @@ async def _delete_forwarded(chat_id: int, deleted_ids: list[int], task: dict) ->
         if not mapped:
             continue
 
-        for chat_str, target_msg_id in mapped.items():
+        for chat_str, value in mapped.items():
             try:
+                target_msg_id = value["id"] if isinstance(value, dict) else value
                 await client.delete_messages(int(chat_str), int(target_msg_id))
             except Exception as exc:
                 LOGS.warning("Failed to delete message in chat %s: %s", chat_str, exc)
@@ -112,6 +135,50 @@ async def _delete_forwarded(chat_id: int, deleted_ids: list[int], task: dict) ->
 
     cross_ids[chat_id_key] = chat_map
     await edit_work(task["work_name"], crossids=cross_ids)
+
+
+# ──────────────────────────────────────────────
+#  Crossids cleanup (hourly, prunes entries > 2 days)
+# ──────────────────────────────────────────────
+
+async def _cleanup_crossids():
+    """Periodically prune old crossids entries to prevent unbounded growth."""
+    while True:
+        await asyncio.sleep(3600)  # Run every hour
+        try:
+            now = int(time.time())
+            for task_name, task in list(CACHE.items()):
+                if not isinstance(task, dict) or "crossids" not in task:
+                    continue
+                cross_ids = task["crossids"]
+                changed = False
+                for chat_key in list(cross_ids.keys()):
+                    msg_map = cross_ids[chat_key]
+                    for msg_key in list(msg_map.keys()):
+                        entry = msg_map[msg_key]
+                        # Check any target's timestamp; if all are old format (no ts), skip
+                        should_prune = False
+                        for value in entry.values():
+                            if isinstance(value, dict) and "ts" in value:
+                                if now - value["ts"] > _CROSSIDS_TTL:
+                                    should_prune = True
+                                break
+                        if should_prune:
+                            del msg_map[msg_key]
+                            changed = True
+                    # Clean up empty chat maps
+                    if not msg_map:
+                        del cross_ids[chat_key]
+                        changed = True
+                if changed:
+                    await edit_work(task_name, crossids=cross_ids)
+            LOGS.info("Crossids cleanup completed.")
+        except Exception as exc:
+            LOGS.warning("Crossids cleanup error: %s", exc)
+
+
+# Start the cleanup task
+asyncio.ensure_future(_cleanup_crossids())
 
 
 # ──────────────────────────────────────────────
@@ -125,10 +192,9 @@ async def _on_new_message(e):
     if not _should_process(e):
         return
     try:
-        ch = await e.get_chat()
-        if not ch:
+        chat_id = e.chat_id
+        if not chat_id:
             return
-        chat_id = get_peer_id(ch)
         tasks = await get_tasks_for_source(chat_id)
         for task in tasks:
             if task.get("has_to_forward"):
@@ -143,10 +209,9 @@ async def _on_message_edit(e):
     if not _should_process(e):
         return
     try:
-        ch = await e.get_chat()
-        if not ch:
+        chat_id = e.chat_id
+        if not chat_id:
             return
-        chat_id = get_peer_id(ch)
         tasks = await get_tasks_for_source(chat_id)
         for task in tasks:
             if task.get("has_to_edit"):

@@ -1,7 +1,23 @@
 import json
 from typing import Any
 
-from bot import CACHE, FORWARD_MODE_KEY, LOGS, db
+from bot import CACHE, FORWARD_MODE_KEY, LOGS, SOURCE_INDEX, db
+
+
+def _index_add(work_name: str, sources: list[int]) -> None:
+    """Add a task to SOURCE_INDEX for each of its source chat IDs."""
+    for src in sources:
+        SOURCE_INDEX.setdefault(src, set()).add(work_name)
+
+
+def _index_remove(work_name: str, sources: list[int]) -> None:
+    """Remove a task from SOURCE_INDEX for each of its source chat IDs."""
+    for src in sources:
+        bucket = SOURCE_INDEX.get(src)
+        if bucket:
+            bucket.discard(work_name)
+            if not bucket:
+                del SOURCE_INDEX[src]
 
 
 async def get_work(work_name: str) -> dict:
@@ -20,11 +36,11 @@ async def get_all_work_names() -> list[str]:
 
 
 async def get_tasks_for_source(source_id: int) -> list[dict]:
-    """Return all tasks that have the given source_id in their source list."""
-    return [
-        task for task in CACHE.values()
-        if isinstance(task, dict) and source_id in (task.get("source") or [])
-    ]
+    """Return all tasks that have the given source_id — O(1) via SOURCE_INDEX."""
+    task_names = SOURCE_INDEX.get(source_id)
+    if not task_names:
+        return []
+    return [CACHE[name] for name in task_names if name in CACHE]
 
 
 async def setup_work(work_name: str, source: list[int], target: list[int]) -> None:
@@ -42,6 +58,7 @@ async def setup_work(work_name: str, source: list[int], target: list[int]) -> No
         "has_to_forward": True,
     }
     CACHE[work_name] = data
+    _index_add(work_name, source)
     await _persist(work_name, data)
 
 
@@ -50,6 +67,14 @@ async def edit_work(work_name: str, **kwargs: Any) -> bool:
     task_data = await get_work(work_name)
     if not task_data:
         return False
+
+    # If source list is changing, update the index
+    if "source" in kwargs:
+        old_sources = task_data.get("source") or []
+        new_sources = kwargs["source"]
+        _index_remove(work_name, old_sources)
+        _index_add(work_name, new_sources)
+
     task_data.update(kwargs)
     CACHE[work_name] = task_data
     await _persist(work_name, task_data)
@@ -58,7 +83,9 @@ async def edit_work(work_name: str, **kwargs: Any) -> bool:
 
 async def delete_work(work_name: str) -> None:
     """Delete a task from both cache and Redis."""
-    CACHE.pop(work_name, None)
+    task_data = CACHE.pop(work_name, None)
+    if task_data:
+        _index_remove(work_name, task_data.get("source") or [])
     await db.delete(work_name)
 
 
@@ -66,8 +93,12 @@ async def rename_work(old_name: str, new_name: str) -> None:
     """Rename a task, updating both cache and Redis."""
     data = CACHE.pop(old_name, None)
     if data:
+        # Update index: remove old name, add new name
+        sources = data.get("source") or []
+        _index_remove(old_name, sources)
         data["work_name"] = new_name
         CACHE[new_name] = data
+        _index_add(new_name, sources)
     await db.rename(old_name, new_name)
     await _persist(new_name, CACHE.get(new_name, {}))
 
