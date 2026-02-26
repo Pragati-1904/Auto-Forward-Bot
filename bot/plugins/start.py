@@ -15,7 +15,7 @@ START_TEXT = (
 
 HELP_TEXT = (
     "💎 **Command Panel**\n\n"
-    "/add\\_task  – Add a new forwarding task\n"
+    "/add_task  – Add a new forwarding task\n"
     "/tasks     – Manage existing tasks\n"
     "/mode      – Switch forwarding client\n"
     "/status    – View system status\n"

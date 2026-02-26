@@ -119,29 +119,19 @@ async def _delete_forwarded(chat_id: int, deleted_ids: list[int], task: dict) ->
 # ──────────────────────────────────────────────
 
 async def _on_new_message(e):
-    client_name = "bot" if e.client is bot else "userbot"
-    LOGS.info("[FWD] Handler hit | client=%s | out=%s | chat=%s",
-             client_name, getattr(e, "out", "N/A"), getattr(e, "chat_id", "N/A"))
-    if getattr(e, "out", False):
-        LOGS.info("[FWD] Skipped: outgoing")
+    # Skip outgoing non-channel messages (channel posts appear as "out" for userbots)
+    if getattr(e, "out", False) and not getattr(e, "is_channel", False):
         return
     if not _should_process(e):
-        LOGS.info("[FWD] Skipped: wrong client for mode=%s", CACHE.get(FORWARD_MODE_KEY, "bot"))
         return
     try:
         ch = await e.get_chat()
         if not ch:
             return
         chat_id = get_peer_id(ch)
-        LOGS.info("[FWD] Resolved chat_id=%s", chat_id)
         tasks = await get_tasks_for_source(chat_id)
-        if not tasks:
-            LOGS.info("[FWD] No tasks matched for chat_id=%s", chat_id)
-            return
-        LOGS.info("[FWD] Matched %d task(s) for chat_id=%s", len(tasks), chat_id)
         for task in tasks:
             if task.get("has_to_forward"):
-                LOGS.info("[FWD] Forwarding to targets: %s", task.get("target"))
                 asyncio.ensure_future(_forward_message(e, task))
     except Exception as exc:
         LOGS.warning("Error in new message handler: %s", exc)
@@ -204,7 +194,7 @@ async def handle_message_delete_bot(e):
 # ──────────────────────────────────────────────
 
 if userbot:
-    @userbot.on(events.NewMessage())
+    @userbot.on(events.NewMessage())  # No incoming=True — channels post as "out"
     async def handle_new_message_userbot(e):
         await _on_new_message(e)
 
