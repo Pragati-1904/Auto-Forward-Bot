@@ -31,7 +31,7 @@ def _should_process(e) -> bool:
 async def _send_to_target(client, chat, e, show_header: bool):
     """Send a single message to one target chat. Returns (chat, msg_id) or None."""
     if show_header:
-        await e.message.forward_to(chat)
+        await client.forward_messages(chat, e.message.id, e.chat_id)
         return None
     else:
         msg = await client.send_message(chat, e.message)
@@ -204,7 +204,7 @@ async def _on_new_message(e):
 
 
 async def _on_message_edit(e):
-    if getattr(e, "out", False):
+    if getattr(e, "out", False) and not getattr(e, "is_channel", False):
         return
     if not _should_process(e):
         return
