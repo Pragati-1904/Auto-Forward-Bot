@@ -1,5 +1,7 @@
 import time
 
+from telethon.utils import get_peer_id
+
 from . import CACHE, FORWARD_MODE_KEY, LOGS, asyncio, bot, events, userbot
 from .database.addwork_db import edit_work, get_tasks_for_source
 
@@ -28,10 +30,10 @@ def _should_process(e) -> bool:
     return True
 
 
-async def _send_to_target(client, chat, e, show_header: bool):
+async def _send_to_target(client, chat, e, source_peer_id: int, show_header: bool):
     """Send a single message to one target chat. Returns (chat, msg_id) or None."""
     if show_header:
-        await client.forward_messages(chat, e.message.id, e.chat_id)
+        await client.forward_messages(chat, e.message.id, source_peer_id)
         return None
     else:
         msg = await client.send_message(chat, e.message)
@@ -56,8 +58,12 @@ async def _forward_message(e, task: dict) -> None:
         if any(word in message_text for word in blacklist_words):
             return
 
+    # Resolve source peer ID once for correct -100 prefixed format
+    ch = await e.get_chat()
+    source_peer_id = get_peer_id(ch) if ch else e.chat_id
+
     # Fire off all targets in parallel
-    coros = [_send_to_target(client, chat, e, show_header) for chat in target_chats]
+    coros = [_send_to_target(client, chat, e, source_peer_id, show_header) for chat in target_chats]
     results = await asyncio.gather(*coros, return_exceptions=True)
 
     # Collect crossids from successful sends (non-header mode only)
@@ -68,7 +74,7 @@ async def _forward_message(e, task: dict) -> None:
             LOGS.warning("Failed to forward message: %s", result)
         elif result is not None:
             chat, msg_id = result
-            entry = cross_ids.setdefault(str(e.chat_id), {}).setdefault(str(e.id), {})
+            entry = cross_ids.setdefault(str(source_peer_id), {}).setdefault(str(e.id), {})
             entry[str(chat)] = {"id": msg_id, "ts": ts}
             needs_persist = True
 
@@ -84,7 +90,8 @@ async def _forward_edit(e, task: dict) -> None:
     blacklist_words = task["blacklist_words"]
     use_blacklist = task.get("has_to_blacklist", False)
 
-    chat_id_key = str(e.chat_id)
+    ch = await e.get_chat()
+    chat_id_key = str(get_peer_id(ch)) if ch else str(e.chat_id)
     msg_id_key = str(e.id)
 
     mapped = cross_ids.get(chat_id_key, {}).get(msg_id_key)
@@ -192,9 +199,10 @@ async def _on_new_message(e):
     if not _should_process(e):
         return
     try:
-        chat_id = e.chat_id
-        if not chat_id:
+        ch = await e.get_chat()
+        if not ch:
             return
+        chat_id = get_peer_id(ch)
         tasks = await get_tasks_for_source(chat_id)
         for task in tasks:
             if task.get("has_to_forward"):
@@ -209,9 +217,10 @@ async def _on_message_edit(e):
     if not _should_process(e):
         return
     try:
-        chat_id = e.chat_id
-        if not chat_id:
+        ch = await e.get_chat()
+        if not ch:
             return
+        chat_id = get_peer_id(ch)
         tasks = await get_tasks_for_source(chat_id)
         for task in tasks:
             if task.get("has_to_edit"):
@@ -224,9 +233,10 @@ async def _on_message_delete(e):
     if not _should_process(e):
         return
     try:
-        chat_id = e.chat_id
-        if not chat_id:
+        ch = await e.get_chat()
+        if not ch:
             return
+        chat_id = get_peer_id(ch)
         tasks = await get_tasks_for_source(chat_id)
         for task in tasks:
             if task.get("has_to_forward"):
