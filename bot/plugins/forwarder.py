@@ -2,7 +2,7 @@ import time
 
 from telethon.utils import get_peer_id
 
-from . import CACHE, FORWARD_MODE_KEY, LOGS, asyncio, bot, events, userbot
+from . import CACHE, FORWARD_MODE_KEY, LOGS, SOURCE_INDEX, asyncio, bot, events, userbot
 from .database.addwork_db import edit_work, get_tasks_for_source
 
 # Crossids entries older than this (seconds) are pruned
@@ -63,6 +63,8 @@ async def _forward_message(e, task: dict) -> None:
     source_peer_id = get_peer_id(ch) if ch else e.chat_id
 
     # Fire off all targets in parallel
+    _client_name = "userbot" if (client is not bot) else "bot"
+    LOGS.info("[TRACE] _forward_message: sending via %s to %s targets, show_header=%s", _client_name, len(target_chats), show_header)
     coros = [_send_to_target(client, chat, e, source_peer_id, show_header) for chat in target_chats]
     results = await asyncio.gather(*coros, return_exceptions=True)
 
@@ -71,7 +73,7 @@ async def _forward_message(e, task: dict) -> None:
     needs_persist = False
     for result in results:
         if isinstance(result, Exception):
-            LOGS.warning("Failed to forward message: %s", result)
+            LOGS.warning("[TRACE] Failed to forward message: %s", result)
         elif result is not None:
             chat, msg_id = result
             entry = cross_ids.setdefault(str(source_peer_id), {}).setdefault(str(e.id), {})
@@ -193,20 +195,40 @@ asyncio.ensure_future(_cleanup_crossids())
 # ──────────────────────────────────────────────
 
 async def _on_new_message(e):
+    _client_name = "bot" if (e.client is bot) else "userbot"
+    _out = getattr(e, "out", False)
+    _is_ch = getattr(e, "is_channel", False)
+    LOGS.info(
+        "[TRACE] _on_new_message: client=%s chat_id=%s out=%s is_channel=%s",
+        _client_name, e.chat_id, _out, _is_ch,
+    )
+
     # Skip outgoing non-channel messages (channel posts appear as "out" for userbots)
-    if getattr(e, "out", False) and not getattr(e, "is_channel", False):
+    if _out and not _is_ch:
+        LOGS.info("[TRACE] Skipped: outgoing non-channel message")
         return
     if not _should_process(e):
+        mode = CACHE.get(FORWARD_MODE_KEY, "bot")
+        LOGS.info("[TRACE] Skipped by _should_process: mode=%s client=%s", mode, _client_name)
         return
     try:
         ch = await e.get_chat()
         if not ch:
+            LOGS.info("[TRACE] Skipped: e.get_chat() returned None")
             return
         chat_id = get_peer_id(ch)
+        LOGS.info(
+            "[TRACE] Resolved: raw_chat_id=%s get_peer_id=%s chat_type=%s SOURCE_INDEX_keys=%s",
+            e.chat_id, chat_id, type(ch).__name__, list(SOURCE_INDEX.keys()),
+        )
         tasks = await get_tasks_for_source(chat_id)
+        LOGS.info("[TRACE] Tasks found: %d", len(tasks))
         for task in tasks:
             if task.get("has_to_forward"):
+                LOGS.info("[TRACE] Forwarding task '%s' to targets: %s", task["work_name"], task["target"])
                 asyncio.ensure_future(_forward_message(e, task))
+            else:
+                LOGS.info("[TRACE] Task '%s' has_to_forward=False, skipped", task["work_name"])
     except Exception as exc:
         LOGS.warning("Error in new message handler: %s", exc)
 
@@ -262,6 +284,23 @@ async def handle_message_edit_bot(e):
 @bot.on(events.MessageDeleted())
 async def handle_message_delete_bot(e):
     await _on_message_delete(e)
+
+@bot.on(events.NewMessage(incoming=True, pattern=r"^/debug$"))
+async def debug_handler(e):    
+    from bot import SOURCE_INDEX, CACHE
+    from telethon.utils import get_peer_id
+    
+    lines = ["**SOURCE_INDEX keys:**"]
+    for k in SOURCE_INDEX:
+        lines.append(f"  `{k}` (type: {type(k).__name__})")
+    
+    lines.append("\n**Task sources:**")
+    for name, task in CACHE.items():
+        if isinstance(task, dict) and "source" in task:
+            for s in task["source"]:
+                lines.append(f"  task={name} src=`{s}` (type: {type(s).__name__})")
+    
+    await e.reply("\n".join(lines))    
 
 
 # ──────────────────────────────────────────────

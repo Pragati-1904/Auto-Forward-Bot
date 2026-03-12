@@ -73,17 +73,12 @@ loop.run_until_complete(sync_redis_to_cache(db, CACHE))
 loop.run_until_complete(load_forward_mode(db, CACHE))
 LOGS.info("Successfully synced Redis into local cache.")
 
-LOGS.info("Bot started.")
+LOGS.info("Bot started. Userbot active: %s", _bot_pkg.userbot is not None)
 
 try:
-    if userbot:
-        # Keep both clients alive — gather ensures reconnection works for both
-        import asyncio as _aio
-        loop.run_until_complete(
-            _aio.gather(bot.disconnected, userbot.disconnected)
-        )
-    else:
-        bot.run_until_disconnected()
+    # bot.run_until_disconnected() keeps the event loop alive for BOTH clients
+    # (bot + userbot share the same loop, so userbot stays connected too)
+    bot.run_until_disconnected()
 except KeyboardInterrupt:
     LOGS.info("Shutting down bot...")
     exit(0)
