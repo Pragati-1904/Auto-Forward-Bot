@@ -1,5 +1,6 @@
 import time
 
+from telethon.tl.functions.messages import ForwardMessagesRequest
 from telethon.tl.types import PeerChannel
 from telethon.utils import get_peer_id
 
@@ -70,12 +71,33 @@ def _dedup_check_delete(chat_id: int, msg_ids: tuple) -> bool:
 
 async def _send_to_target(client, chat, e, source_peer_id: int, show_header: bool):
     """Send a single message to one target chat. Returns (chat, msg_id) or None."""
-    if show_header:
-        await client.forward_messages(chat, e.message.id, source_peer_id)
+    try:
+        from_peer = await client.get_input_entity(source_peer_id)
+        to_peer = await client.get_input_entity(chat)
+
+        result = await client(ForwardMessagesRequest(
+            from_peer=from_peer,
+            id=[e.message.id],
+            to_peer=to_peer,
+            drop_author=not show_header,
+            silent=True,
+        ))
+
+        new_msg_id = None
+        for update in result.updates:
+            if hasattr(update, "id") and hasattr(update, "message"):
+                new_msg_id = update.id
+                break
+        if new_msg_id is None and result.updates:
+            for update in result.updates:
+                if hasattr(update, "id"):
+                    new_msg_id = update.id
+                    break
+
+        return (chat, new_msg_id) if new_msg_id else None
+    except Exception as exc:
+        LOGS.warning("Failed to forward to chat %s: %s", chat, exc)
         return None
-    else:
-        msg = await client.send_message(chat, e.message)
-        return (chat, msg.id)
 
 
 async def _forward_message(e, task: dict) -> None:
@@ -112,9 +134,10 @@ async def _forward_message(e, task: dict) -> None:
             LOGS.warning("Failed to forward message to target[%d]: %s", i, result)
         elif result is not None:
             chat, msg_id = result
-            entry = cross_ids.setdefault(str(source_peer_id), {}).setdefault(str(e.id), {})
-            entry[str(chat)] = {"id": msg_id, "ts": ts}
-            needs_persist = True
+            if msg_id:
+                entry = cross_ids.setdefault(str(source_peer_id), {}).setdefault(str(e.id), {})
+                entry[str(chat)] = {"id": msg_id, "ts": ts}
+                needs_persist = True
 
     # Single Redis write after all targets
     if needs_persist:
