@@ -52,6 +52,29 @@ async def _try_join_invite(conv, invite_hash: str) -> int | None:
         return chat_id
     except Exception as exc:
         exc_msg = str(exc).lower()
+        # Already a member — resolve the channel from the invite link
+        if "already a participant" in exc_msg:
+            try:
+                from telethon.tl.functions.messages import CheckChatInviteRequest
+                invite_info = await client(CheckChatInviteRequest(invite_hash))
+                chat = invite_info.chat
+                from telethon.utils import get_peer_id
+                chat_id = get_peer_id(chat)
+                title = getattr(chat, "title", "Unknown")
+                await conv.send_message(
+                    f"✅ Successfully Found Channel!\n"
+                    f"**Name** : {title}\n"
+                    f"**ID** : {chat_id}"
+                )
+                return chat_id
+            except Exception as inner_exc:
+                LOGS.warning("Failed to resolve already-joined channel: %s", inner_exc)
+                await conv.send_message(
+                    "⚠️ Already a member but couldn't resolve channel info.\n"
+                    "Please use the channel ID directly instead.\n\n"
+                    "Try again:"
+                )
+                return None
         # Channel requires admin approval — join request was sent
         if "requested to join" in exc_msg:
             LOGS.info("Join request sent for invite hash: %s", invite_hash)

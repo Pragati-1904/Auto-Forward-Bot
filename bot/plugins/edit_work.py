@@ -1,5 +1,5 @@
 from . import LOGS, Button, Var, bot, events, re
-from .add_work import validate_channels
+from .add_work import resolve_channel_name, validate_channels
 from .database.addwork_db import (
     delete_work,
     edit_work,
@@ -27,7 +27,7 @@ def _build_task_list_buttons(work_names) -> list:
     return [list(buttons[i:i + 3]) for i in range(0, len(buttons), 3)]
 
 
-def _task_detail_text(task_name: str, data: dict) -> str:
+async def _task_detail_text(task_name: str, data: dict) -> str:
     """Build the task details screen text."""
     status = "Running" if data.get("has_to_forward") else "Paused"
     status_icon = "🟢" if data.get("has_to_forward") else "🔴"
@@ -37,6 +37,13 @@ def _task_detail_text(task_name: str, data: dict) -> str:
     blacklist = "On" if data.get("has_to_blacklist") else "Off"
     edit_sync = "On" if data.get("has_to_edit") else "Off"
 
+    source_lines = []
+    for cid in data.get("source", []):
+        source_lines.append(f"  • {await resolve_channel_name(cid)}")
+    target_lines = []
+    for cid in data.get("target", []):
+        target_lines.append(f"  • {await resolve_channel_name(cid)}")
+
     return (
         f"📋 **Task Details**\n\n"
         f"**Name** : {task_name}\n"
@@ -45,7 +52,9 @@ def _task_detail_text(task_name: str, data: dict) -> str:
         f"**Header** : {header}\n"
         f"**Delay** : {delay}s\n"
         f"**Blacklist** : {blacklist}\n"
-        f"**Edit Sync** : {edit_sync}"
+        f"**Edit Sync** : {edit_sync}\n\n"
+        f"**Sources:**\n" + ("\n".join(source_lines) or "  None") + "\n\n"
+        f"**Targets:**\n" + ("\n".join(target_lines) or "  None")
     )
 
 
@@ -85,7 +94,7 @@ def _task_detail_buttons(task_name: str, data: dict) -> list:
 async def _send_task_detail(e, task_name: str):
     """Edit the current message to show task details."""
     data = await get_work(task_name)
-    text = _task_detail_text(task_name, data)
+    text = await _task_detail_text(task_name, data)
     buttons = _task_detail_buttons(task_name, data)
     await e.edit(text, buttons=buttons)
 
@@ -93,7 +102,7 @@ async def _send_task_detail(e, task_name: str):
 async def _conv_send_task_detail(conv, task_name: str):
     """Send task details as a new message in a conversation."""
     data = await get_work(task_name)
-    text = _task_detail_text(task_name, data)
+    text = await _task_detail_text(task_name, data)
     buttons = _task_detail_buttons(task_name, data)
     await conv.send_message(text, buttons=buttons)
 
@@ -242,7 +251,10 @@ async def handle_edit_delay(e):
 async def handle_edit_source(e):
     task_name = e.pattern_match.group(1).decode("utf-8")
     task_data = await get_work(task_name)
-    current = "\n".join(f"  • {cid}" for cid in task_data.get("source", []))
+    current_lines = []
+    for cid in task_data.get("source", []):
+        current_lines.append(f"  • {await resolve_channel_name(cid)}")
+    current = "\n".join(current_lines) or "  None"
     try:
         async with bot.conversation(e.sender_id, timeout=2000) as conv:
             await e.delete()
@@ -291,7 +303,10 @@ async def handle_edit_source(e):
 async def handle_edit_target(e):
     task_name = e.pattern_match.group(1).decode("utf-8")
     task_data = await get_work(task_name)
-    current = "\n".join(f"  • {cid}" for cid in task_data.get("target", []))
+    current_lines = []
+    for cid in task_data.get("target", []):
+        current_lines.append(f"  • {await resolve_channel_name(cid)}")
+    current = "\n".join(current_lines) or "  None"
     try:
         async with bot.conversation(e.sender_id, timeout=2000) as conv:
             await e.delete()
