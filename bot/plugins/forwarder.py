@@ -74,17 +74,7 @@ async def _send_to_target(client, chat, e, source_peer_id: int, show_header: boo
         await client.forward_messages(chat, e.message.id, source_peer_id)
         return None
     else:
-        # Use send_file for media messages (GIFs, voice, stickers, videos, etc.)
-        # send_message with a Message object can silently fail for some media types.
-        if e.message.media:
-            msg = await client.send_file(
-                chat,
-                e.message.media,
-                caption=e.message.text or "",
-                formatting_entities=e.message.entities,
-            )
-        else:
-            msg = await client.send_message(chat, e.message)
+        msg = await client.send_message(chat, e.message)
         return (chat, msg.id)
 
 
@@ -117,9 +107,9 @@ async def _forward_message(e, task: dict) -> None:
     # Collect crossids from successful sends (non-header mode only)
     ts = int(time.time())
     needs_persist = False
-    for result in results:
+    for i, result in enumerate(results):
         if isinstance(result, Exception):
-            LOGS.warning("Failed to forward message: %s", result)
+            LOGS.warning("Failed to forward message to target[%d]: %s", i, result)
         elif result is not None:
             chat, msg_id = result
             entry = cross_ids.setdefault(str(source_peer_id), {}).setdefault(str(e.id), {})
@@ -156,7 +146,6 @@ async def _forward_edit(e, task: dict) -> None:
             # Backward compat: value can be int (old format) or dict (new format)
             target_msg_id = value["id"] if isinstance(value, dict) else value
             chat = int(chat_str)
-            # Edit with both text and media so caption changes, media swaps, etc. sync
             if e.message.media:
                 await client.edit_message(
                     chat,
@@ -254,7 +243,6 @@ asyncio.ensure_future(_cleanup_crossids())
 # ──────────────────────────────────────────────
 
 async def _on_new_message(e):
-    # Skip outgoing non-channel messages (channel posts appear as "out" for userbots)
     if getattr(e, "out", False) and not getattr(e, "is_channel", False):
         return
     try:
@@ -292,8 +280,6 @@ async def _on_message_edit(e):
 
 async def _on_message_delete(e):
     try:
-        # For channel deletes, e.get_chat() often returns None because Telethon
-        # doesn't have enough context. Use channel_id to construct the peer ID.
         chat_id = None
         if getattr(e, "channel_id", None):
             chat_id = get_peer_id(PeerChannel(e.channel_id))
@@ -333,23 +319,6 @@ async def handle_message_edit_bot(e):
 @bot.on(events.MessageDeleted())
 async def handle_message_delete_bot(e):
     await _on_message_delete(e)
-
-@bot.on(events.NewMessage(incoming=True, pattern=r"^/debug$"))
-async def debug_handler(e):    
-    from bot import SOURCE_INDEX, CACHE
-    from telethon.utils import get_peer_id
-    
-    lines = ["**SOURCE_INDEX keys:**"]
-    for k in SOURCE_INDEX:
-        lines.append(f"  `{k}` (type: {type(k).__name__})")
-    
-    lines.append("\n**Task sources:**")
-    for name, task in CACHE.items():
-        if isinstance(task, dict) and "source" in task:
-            for s in task["source"]:
-                lines.append(f"  task={name} src=`{s}` (type: {type(s).__name__})")
-    
-    await e.reply("\n".join(lines))    
 
 
 # ──────────────────────────────────────────────
