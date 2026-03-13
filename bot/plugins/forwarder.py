@@ -36,6 +36,23 @@ def _dedup_check(chat_id: int, msg_id: int) -> bool:
     return False
 
 
+_processed_edits: dict[tuple, float] = {}
+
+
+def _dedup_check_edit(chat_id: int, msg_id: int) -> bool:
+    """Edit-specific dedup using 2-second buckets so rapid edits still go through."""
+    now = time.time()
+    bucket = int(now / 2)
+    key = (chat_id, msg_id, bucket)
+    expired = [k for k, ts in _processed_edits.items() if now - ts > _PROCESSED_TTL]
+    for k in expired:
+        del _processed_edits[k]
+    if key in _processed_edits:
+        return True
+    _processed_edits[key] = now
+    return False
+
+
 async def _send_to_target(client, chat, e, source_peer_id: int, show_header: bool):
     """Send a single message to one target chat. Returns (chat, msg_id) or None."""
     if show_header:
@@ -225,7 +242,7 @@ async def _on_message_edit(e):
         if not ch:
             return
         chat_id = get_peer_id(ch)
-        if _dedup_check(chat_id, e.id):
+        if _dedup_check_edit(chat_id, e.id):
             return
         tasks = await get_tasks_for_source(chat_id)
         for task in tasks:
@@ -237,10 +254,16 @@ async def _on_message_edit(e):
 
 async def _on_message_delete(e):
     try:
-        ch = await e.get_chat()
-        if not ch:
+        chat_id = e.chat_id
+        if not chat_id:
             return
-        chat_id = get_peer_id(ch)
+        # Best-effort: try to resolve the full peer ID, but don't bail if it fails
+        try:
+            ch = await e.get_chat()
+            if ch:
+                chat_id = get_peer_id(ch)
+        except Exception:
+            pass
         tasks = await get_tasks_for_source(chat_id)
         for task in tasks:
             if task.get("has_to_forward"):
