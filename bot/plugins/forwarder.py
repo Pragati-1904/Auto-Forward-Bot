@@ -38,6 +38,7 @@ def _dedup_check(chat_id: int, msg_id: int) -> bool:
 
 
 _processed_edits: dict[tuple, float] = {}
+_processed_deletes: dict[tuple, float] = {}
 
 
 def _dedup_check_edit(chat_id: int, msg_id: int) -> bool:
@@ -51,6 +52,19 @@ def _dedup_check_edit(chat_id: int, msg_id: int) -> bool:
     if key in _processed_edits:
         return True
     _processed_edits[key] = now
+    return False
+
+
+def _dedup_check_delete(chat_id: int, msg_ids: tuple) -> bool:
+    """Delete-specific dedup so only one client processes a given batch of deletes."""
+    now = time.time()
+    key = (chat_id, msg_ids)
+    expired = [k for k, ts in _processed_deletes.items() if now - ts > _PROCESSED_TTL]
+    for k in expired:
+        del _processed_deletes[k]
+    if key in _processed_deletes:
+        return True
+    _processed_deletes[key] = now
     return False
 
 
@@ -268,6 +282,8 @@ async def _on_message_delete(e):
             except Exception:
                 pass
         if not chat_id:
+            return
+        if _dedup_check_delete(chat_id, tuple(e.deleted_ids)):
             return
         tasks = await get_tasks_for_source(chat_id)
         for task in tasks:
