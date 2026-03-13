@@ -52,6 +52,12 @@ if userbot:
     try:
         userbot.start()
         LOGS.info("Userbot client started.")
+        # Fetch dialogs to populate the entity cache (access hashes).
+        # StringSession only stores the auth key, NOT the entity cache.
+        # Without this, Telethon can't receive updates from channels.
+        LOGS.info("Fetching userbot dialogs to cache channel access hashes...")
+        loop.run_until_complete(userbot.get_dialogs())
+        LOGS.info("Userbot dialogs fetched.")
     except Exception as e:
         LOGS.error("Failed to start userbot: %s (falling back to bot)", e)
         _bot_pkg.userbot = None
