@@ -1,5 +1,6 @@
 import time
 
+from telethon.tl.types import PeerChannel
 from telethon.utils import get_peer_id
 
 from . import CACHE, FORWARD_MODE_KEY, LOGS, SOURCE_INDEX, asyncio, bot, events, userbot
@@ -254,16 +255,20 @@ async def _on_message_edit(e):
 
 async def _on_message_delete(e):
     try:
-        chat_id = e.chat_id
+        # For channel deletes, e.get_chat() often returns None because Telethon
+        # doesn't have enough context. Use channel_id to construct the peer ID.
+        chat_id = None
+        if getattr(e, "channel_id", None):
+            chat_id = get_peer_id(PeerChannel(e.channel_id))
+        else:
+            try:
+                ch = await e.get_chat()
+                if ch:
+                    chat_id = get_peer_id(ch)
+            except Exception:
+                pass
         if not chat_id:
             return
-        # Best-effort: try to resolve the full peer ID, but don't bail if it fails
-        try:
-            ch = await e.get_chat()
-            if ch:
-                chat_id = get_peer_id(ch)
-        except Exception:
-            pass
         tasks = await get_tasks_for_source(chat_id)
         for task in tasks:
             if task.get("has_to_forward"):
