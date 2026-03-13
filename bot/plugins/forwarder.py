@@ -74,7 +74,17 @@ async def _send_to_target(client, chat, e, source_peer_id: int, show_header: boo
         await client.forward_messages(chat, e.message.id, source_peer_id)
         return None
     else:
-        msg = await client.send_message(chat, e.message)
+        # Use send_file for media messages (GIFs, voice, stickers, videos, etc.)
+        # send_message with a Message object can silently fail for some media types.
+        if e.message.media:
+            msg = await client.send_file(
+                chat,
+                e.message.media,
+                caption=e.message.text or "",
+                formatting_entities=e.message.entities,
+            )
+        else:
+            msg = await client.send_message(chat, e.message)
         return (chat, msg.id)
 
 
@@ -146,9 +156,22 @@ async def _forward_edit(e, task: dict) -> None:
             # Backward compat: value can be int (old format) or dict (new format)
             target_msg_id = value["id"] if isinstance(value, dict) else value
             chat = int(chat_str)
-            msg = await client.get_messages(chat, ids=int(target_msg_id))
-            if msg:
-                await msg.edit(e.text)
+            # Edit with both text and media so caption changes, media swaps, etc. sync
+            if e.message.media:
+                await client.edit_message(
+                    chat,
+                    int(target_msg_id),
+                    text=e.message.text or "",
+                    file=e.message.media,
+                    formatting_entities=e.message.entities,
+                )
+            else:
+                await client.edit_message(
+                    chat,
+                    int(target_msg_id),
+                    text=e.message.text or "",
+                    formatting_entities=e.message.entities,
+                )
         except Exception as exc:
             LOGS.warning("Failed to forward edit to chat %s: %s", chat_str, exc)
 
